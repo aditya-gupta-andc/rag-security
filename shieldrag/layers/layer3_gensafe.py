@@ -35,10 +35,19 @@ class InjecGuard:
         "entire knowledge base","every document","complete export",
         "raw contents","comprehensive listing","full text of every",
         "enumerate all passages",
+        # Access violation / cross-tenant patterns
+        "all tenants","across all tenants","every tenant","every namespace",
+        "all tenant data","bypass access","bypass controls","override access",
+        "ignoring restrictions","ignoring access control",
+        "cross-tenant","merge all tenant","combined tenant",
+        "classified documents from",
     ]
     LEAK_KW=["system prompt","internal configuration","all documents",
              "knowledge base contents","decoy","tracker","canary",
              "here are all","full database","complete dump","CANARY"]
+
+    # Leetspeak / character substitution normalisation map (common substitutions)
+    _LEET_MAP = str.maketrans("013457@$", "oieatsas")
 
     def __init__(self, config, device):
         c=config.get("layer3",{}).get("injecguard",{})
@@ -73,8 +82,22 @@ class InjecGuard:
         self.is_trained = True
         logger.info(f"InjecGuard: Loaded model from {path}")
 
+    def _normalise(self, text: str) -> str:
+        """Normalise common evasion techniques (leetspeak, homoglyphs) before matching."""
+        # Lowercase first so subsequent replacements produce consistent lowercase output
+        text = text.lower()
+        # Cyrillic lookalikes → ASCII
+        cyrillic_map = {'\u0430': 'a', '\u0435': 'e', '\u043e': 'o',
+                        '\u0440': 'r', '\u0441': 'c', '\u0456': 'i',
+                        '\u0445': 'x', '\u0443': 'u'}
+        for cyrillic, ascii_char in cyrillic_map.items():
+            text = text.replace(cyrillic, ascii_char)
+        # Leetspeak digits → letters
+        text = text.translate(self._LEET_MAP)
+        return text
+
     def stage1_rules(self, text):
-        tl=text.lower()
+        tl=self._normalise(text)
         m=sum(1 for p in self.PATTERNS if p in tl)
         score=min(m/2.5, 1.0)
         return score < self.rule_th, score

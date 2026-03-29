@@ -351,6 +351,14 @@ class DatasetLoader:
                   HARD_INJECTION_QUERIES + EVASIVE_INJECTION_QUERIES):
             texts.append(q)
             labels.append(1)
+        # Add extraction and access violation attacks so the ML classifier learns
+        # to detect them in addition to the rule-based and L4 keyword checks.
+        for q in EXTRACTION_QUERIES:
+            texts.append(q)
+            labels.append(1)
+        for q in ACCESS_VIOLATION_QUERIES:
+            texts.append(q)
+            labels.append(1)
         # Add synthetic indirect injection doc content
         for content in INDIRECT_INJECTION_DOCS:
             texts.append(content)
