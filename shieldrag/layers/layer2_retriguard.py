@@ -12,10 +12,13 @@ from shieldrag.data.dataset_loader import Document
 logger = logging.getLogger("shieldrag.layer2")
 
 class DenseRetriever:
-    def __init__(self, model_name, device, name="dense"):
+    def __init__(self, model_name, device, name="dense", model=None):
         self.name = name; self.device = device
-        logger.info(f"DenseRetriever[{name}]: Loading {model_name}")
-        self.model = SentenceTransformer(model_name, device=str(device))
+        if model is not None:
+            self.model = model
+        else:
+            logger.info(f"DenseRetriever[{name}]: Loading {model_name}")
+            self.model = SentenceTransformer(model_name, device=str(device))
         self.documents = []; self.embeddings = None; self.index = None
 
     def index_documents(self, documents, batch_size=64):
@@ -105,22 +108,22 @@ class RetriGuard:
         self.final_top_k=cc.get("final_top_k",5)
         rcfgs=cfg.get("retrievers",[])
         self.retrievers=[]
-        loaded={}
+        loaded_models={}   # model_name -> SentenceTransformer (shared weights)
         for rc in rcfgs:
             rt=rc.get("type","dense"); rn=rc.get("name",rt)
             if rt=="bm25":
                 self.retrievers.append(BM25Retriever(name=rn))
             else:
                 mn=rc.get("model",config["models"]["embedding_model"])
-                if mn not in loaded:
-                    loaded[mn]=DenseRetriever(mn,device,name=rn)
-                    self.retrievers.append(loaded[mn])
-                else:
-                    self.retrievers.append(DenseRetriever(mn,device,name=rn))
+                if mn not in loaded_models:
+                    loaded_models[mn]=SentenceTransformer(mn, device=str(device))
+                    logger.info(f"DenseRetriever[{rn}]: Loaded {mn}")
+                self.retrievers.append(DenseRetriever(mn, device, name=rn, model=loaded_models[mn]))
         if not self.retrievers:
             em=config.get("models",{}).get("embedding_model","sentence-transformers/all-MiniLM-L6-v2")
-            self.retrievers=[DenseRetriever(em,device,"dense1"),BM25Retriever("bm25"),
-                             DenseRetriever(em,device,"dense2")]
+            shared_model=SentenceTransformer(em, device=str(device))
+            self.retrievers=[DenseRetriever(em,device,"dense1",model=shared_model),BM25Retriever("bm25"),
+                             DenseRetriever(em,device,"dense2",model=shared_model)]
         # Cross-encoder reranker
         self.reranker=None
         rr_cfg=cfg.get("reranker",{})
