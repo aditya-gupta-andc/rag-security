@@ -2,7 +2,7 @@
 Layer 3: GenSafe — Generation Guardrails
 StruQ (Chen 2025) + InjecGuard (PS4) + Distilled Verifier + flan-t5 Generator
 """
-import re, logging
+import os, re, logging
 from typing import List, Tuple, Dict
 import numpy as np, torch
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
@@ -57,6 +57,22 @@ class InjecGuard:
         logger.info("InjecGuard train report:\n"+classification_report(labels,yp,
                      target_names=["benign","malicious"],zero_division=0))
 
+    def save(self, path: str):
+        """Persist vectorizer + classifier to *path* (joblib format)."""
+        import joblib
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        joblib.dump({"classifier": self.classifier, "vectorizer": self.vectorizer}, path)
+        logger.info(f"InjecGuard: Saved model to {path}")
+
+    def load(self, path: str):
+        """Restore saved InjecGuard model from *path*."""
+        import joblib
+        data = joblib.load(path)
+        self.classifier = data["classifier"]
+        self.vectorizer = data["vectorizer"]
+        self.is_trained = True
+        logger.info(f"InjecGuard: Loaded model from {path}")
+
     def stage1_rules(self, text):
         tl=text.lower()
         m=sum(1 for p in self.PATTERNS if p in tl)
@@ -102,6 +118,22 @@ class DistilledVerifier:
         X=self.vectorizer.fit_transform(texts)
         self.classifier.fit(X, labels)
         self.is_trained=True
+
+    def save(self, path: str):
+        """Persist verifier model to *path* (joblib format)."""
+        import joblib
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        joblib.dump({"classifier": self.classifier, "vectorizer": self.vectorizer}, path)
+        logger.info(f"DistilledVerifier: Saved model to {path}")
+
+    def load(self, path: str):
+        """Restore saved verifier model from *path*."""
+        import joblib
+        data = joblib.load(path)
+        self.classifier = data["classifier"]
+        self.vectorizer = data["vectorizer"]
+        self.is_trained = True
+        logger.info(f"DistilledVerifier: Loaded model from {path}")
 
     def verify(self, text):
         if not self.is_trained: return True, 0.0
@@ -153,11 +185,19 @@ class GenSafe:
         self.verifier=DistilledVerifier(config)
         self.generator=LLMGenerator(config, device)
 
-    def train(self, documents, queries):
+    def train(self, documents, queries, extra_texts=None, extra_labels=None):
+        if extra_texts is not None and extra_labels is not None:
+            if len(extra_texts) != len(extra_labels):
+                raise ValueError(
+                    f"extra_texts ({len(extra_texts)}) and extra_labels "
+                    f"({len(extra_labels)}) must have the same length"
+                )
         texts=[d.content for d in documents if not d.is_decoy]
         labels=[1 if d.is_poisoned else 0 for d in documents if not d.is_decoy]
         for q in queries:
             texts.append(q.text); labels.append(1 if q.is_adversarial else 0)
+        if extra_texts and extra_labels:
+            texts.extend(extra_texts); labels.extend(extra_labels)
         self.injecguard.train(texts, labels)
         self.verifier.train(texts, labels)
 

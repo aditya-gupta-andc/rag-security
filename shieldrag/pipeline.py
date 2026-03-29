@@ -1,5 +1,5 @@
 """ShieldRAG Pipeline — 4-layer composition with proper train/test split."""
-import time, logging
+import os, time, logging
 from collections import deque
 from typing import List, Dict
 import torch
@@ -28,20 +28,44 @@ class ShieldRAGPipeline:
         self.query_log=deque(maxlen=max_log)
 
     def load_and_prepare(self, documents=None, train_queries=None):
-        loader=DatasetLoader(self.config)
+        model_dir = self.config.get("model_cache_dir", "models")
+        os.makedirs(model_dir, exist_ok=True)
+
+        loader = DatasetLoader(self.config)
         all_docs, train_q, val_q, test_q = loader.load_all()
-        self.all_docs=all_docs
-        # L1: sign + train + filter
-        all_docs=self.layer1.sign_documents(all_docs)
-        self.layer1.train(all_docs)
+        self.all_docs = all_docs
+
+        # L1: sign + train/load + filter
+        all_docs = self.layer1.sign_documents(all_docs)
+        gmtp_path = os.path.join(model_dir, "gmtp_classifier.joblib")
+        if os.path.exists(gmtp_path):
+            self.layer1.gmtp.load(gmtp_path)
+            logger.info(f"GMTP: Using cached classifier ({gmtp_path})")
+        else:
+            self.layer1.train(all_docs)
+            self.layer1.gmtp.save(gmtp_path)
         self.safe_docs, self.blocked_docs = self.layer1.filter_kb(all_docs)
-        # L2: index
-        self.layer2.index(self.safe_docs)
-        # L3: train on TRAINING queries only (proper split!)
-        self.layer3.train(all_docs, train_q)
+
+        # L2: build or load retrieval indexes
+        self.layer2.index(self.safe_docs, cache_dir=model_dir)
+
+        # L3: train/load injection classifier + verifier
+        ig_path = os.path.join(model_dir, "injecguard.joblib")
+        ver_path = os.path.join(model_dir, "verifier.joblib")
+        if os.path.exists(ig_path) and os.path.exists(ver_path):
+            self.layer3.injecguard.load(ig_path)
+            self.layer3.verifier.load(ver_path)
+            logger.info("Layer 3: Using cached InjecGuard + Verifier models")
+        else:
+            inj_texts, inj_labels = loader.load_injection_dataset()
+            self.layer3.train(all_docs, train_q,
+                              extra_texts=inj_texts, extra_labels=inj_labels)
+            self.layer3.injecguard.save(ig_path)
+            self.layer3.verifier.save(ver_path)
+
         # L4: tenants
         self.layer4.setup_tenants()
-        self.is_ready=True
+        self.is_ready = True
         logger.info("ShieldRAG v2 pipeline ready!")
         return all_docs, train_q, val_q, test_q
 

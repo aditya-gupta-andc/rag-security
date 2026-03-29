@@ -2,7 +2,7 @@
 Layer 2: RetriGuard — Retrieval Hardening
 Multi-retriever ensemble (PS8) + Cross-encoder reranking + Semantic isolation (PS6)
 """
-import re, math, logging
+import os, re, math, logging
 from typing import List, Tuple, Dict
 from collections import defaultdict, Counter
 import numpy as np, torch
@@ -33,6 +33,26 @@ class DenseRetriever:
         self.index.add(self.embeddings.astype(np.float32))
         logger.info(f"DenseRetriever[{self.name}]: FAISS index built ({dim}d, {len(documents)} vecs)")
 
+    def save_index(self, base_path: str):
+        """Save FAISS index and document list to *base_path*.faiss / .pkl."""
+        import faiss, pickle, os
+        os.makedirs(os.path.dirname(base_path) if os.path.dirname(base_path) else ".", exist_ok=True)
+        faiss.write_index(self.index, base_path + ".faiss")
+        with open(base_path + ".pkl", "wb") as f:
+            pickle.dump(self.documents, f)
+        logger.info(f"DenseRetriever[{self.name}]: Saved index to {base_path}")
+
+    def load_index(self, base_path: str) -> bool:
+        """Load FAISS index and document list from *base_path*. Returns True on success."""
+        import faiss, pickle
+        if not (os.path.exists(base_path + ".faiss") and os.path.exists(base_path + ".pkl")):
+            return False
+        self.index = faiss.read_index(base_path + ".faiss")
+        with open(base_path + ".pkl", "rb") as f:
+            self.documents = pickle.load(f)
+        logger.info(f"DenseRetriever[{self.name}]: Loaded index from {base_path}")
+        return True
+
     def retrieve(self, query, top_k=10):
         qe = self.model.encode([query], convert_to_numpy=True, normalize_embeddings=True).astype(np.float32)
         scores, indices = self.index.search(qe, top_k)
@@ -56,6 +76,28 @@ class BM25Retriever:
             for t in set(tokens): self.doc_freqs[t]+=1
         self.avg_dl=np.mean(self.doc_lens) if self.doc_lens else 1.0
         logger.info(f"BM25[{self.name}]: Indexed {len(documents)} docs")
+
+    def save_index(self, base_path: str):
+        """Save BM25 index state to *base_path*.pkl."""
+        import pickle, os
+        os.makedirs(os.path.dirname(base_path) if os.path.dirname(base_path) else ".", exist_ok=True)
+        state = {k: getattr(self, k) for k in
+                 ["documents", "N", "doc_freqs", "tf_cache", "doc_lens", "avg_dl"]}
+        with open(base_path + ".pkl", "wb") as f:
+            pickle.dump(state, f)
+        logger.info(f"BM25[{self.name}]: Saved index to {base_path}")
+
+    def load_index(self, base_path: str) -> bool:
+        """Load BM25 index state from *base_path*. Returns True on success."""
+        import pickle
+        if not os.path.exists(base_path + ".pkl"):
+            return False
+        with open(base_path + ".pkl", "rb") as f:
+            state = pickle.load(f)
+        for k, v in state.items():
+            setattr(self, k, v)
+        logger.info(f"BM25[{self.name}]: Loaded index from {base_path}")
+        return True
 
     def _score(self, qt, di):
         tf=self.tf_cache[di]; dl=self.doc_lens[di]; s=0.0
@@ -134,10 +176,19 @@ class RetriGuard:
             self.rerank_top_k=rr_cfg.get("top_k",5)
         self.isolator=SemanticIsolator(config)
 
-    def index(self, documents):
+    def index(self, documents, cache_dir=None):
         for r in self.retrievers:
-            if isinstance(r, DenseRetriever): r.index_documents(documents)
-            else: r.index_documents(documents)
+            safe_name = re.sub(r'[^\w]', '_', r.name)
+            cached = False
+            if cache_dir:
+                cache_path = os.path.join(cache_dir, f"retriever_{safe_name}")
+                if hasattr(r, 'load_index') and r.load_index(cache_path):
+                    cached = True
+            if not cached:
+                r.index_documents(documents)
+                if cache_dir and hasattr(r, 'save_index'):
+                    cache_path = os.path.join(cache_dir, f"retriever_{safe_name}")
+                    r.save_index(cache_path)
 
     def retrieve_with_consensus(self, query, top_k=None):
         top_k=top_k or self.final_top_k
