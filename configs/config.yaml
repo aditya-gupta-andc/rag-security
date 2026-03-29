@@ -67,7 +67,7 @@ layer3:
     context_delimiter: "<<<CONTEXT>>>"
     query_delimiter: "<<<QUERY>>>"
   injecguard:
-    rule_threshold: 0.35
+    rule_threshold: 0.50
     classifier_threshold: 0.45
     train_epochs: 3
     learning_rate: 2.0e-5

@@ -2,7 +2,7 @@
 Layer 4: AccessForge — Infrastructure Governance
 RAGFort ACL (PS10) + PA-RAG Isolation + Audit Logging
 """
-import json, time, hashlib, logging
+import json, re, time, hashlib, logging
 from typing import List, Tuple, Dict
 from collections import defaultdict
 from pathlib import Path
@@ -15,6 +15,14 @@ EXTRACT_KW=["list all","show everything","dump","all documents","entire",
             "repeat all","complete listing","enumerate all","export the full",
             "comprehensive listing","wildcard","knowledge base","retrieval corpus",
             "complete export","full text of every"]
+
+ACCESS_VIOLATION_KW=[
+    "all tenants","across all tenants","every tenant","every namespace",
+    "all tenant data","bypass controls","bypass access","override access",
+    "ignoring restrictions","ignoring access control","cross-tenant",
+    "merge all tenant","combined tenant","classified documents from",
+    "across all namespace","override.*permission","bypass.*permission",
+]
 
 class RAGFortACL:
     def __init__(self, config):
@@ -36,6 +44,25 @@ class RAGFortACL:
         if self.counter[tid]>=self.threshold:
             return False,f"Extraction detected ({self.counter[tid]} hits)"
         return True,"OK"
+
+    def monitor_access_violation(self, tid, query):
+        """Detect cross-tenant and access-violation patterns in a single query."""
+        ql = query.lower()
+        # Check keyword-based access violation patterns; use regex only for those that need it
+        for kw in ACCESS_VIOLATION_KW:
+            if '.*' in kw:
+                if re.search(kw, ql):
+                    return False, f"Access violation pattern: '{kw}'"
+            else:
+                if kw in ql:
+                    return False, f"Access violation keyword: '{kw}'"
+        # Check if the query explicitly references a different tenant's namespace
+        for other_tid in self.perms:
+            if other_tid != tid:
+                pattern = r'\b' + re.escape(other_tid.lower()) + r'\b'
+                if re.search(pattern, ql):
+                    return False, f"Cross-tenant reference to '{other_tid}'"
+        return True, "OK"
 
     def check_decoy(self, docs):
         d=[x.doc_id for x in docs if x.is_decoy]
@@ -87,6 +114,11 @@ class AccessForge:
         r["checks"].append({"check":"extraction","passed":es,"reason":er})
         if not es:
             self.audit.log({"event":"extraction_blocked","tenant":tid})
+            r["verdict"]="BLOCKED"; return False, r, []
+        avs, avr = self.ragfort.monitor_access_violation(tid, query)
+        r["checks"].append({"check":"access_violation","passed":avs,"reason":avr})
+        if not avs:
+            self.audit.log({"event":"access_violation_blocked","tenant":tid,"reason":avr})
             r["verdict"]="BLOCKED"; return False, r, []
         filtered=[]
         for d in docs:
