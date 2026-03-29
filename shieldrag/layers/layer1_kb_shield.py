@@ -19,7 +19,7 @@ class GMTPScanner:
         "disregard","priority","critical","hidden","reveal","dump",
         "unrestricted","bypass","disable","new task","you are now",
         "patch","memo","internal","sudo","jailbreak","developer mode",
-        "emergency","supersede","deprecated","override","hidden instruction",
+        "emergency","supersede","deprecated","hidden instruction",
     ]
     def __init__(self, config, device):
         cfg = config.get("layer1",{}).get("gmtp",{})
@@ -110,7 +110,7 @@ class FATHAuthenticator:
 
     def verify(self, doc):
         expected = self.generate_token(doc.content)
-        if doc.hmac_token == expected:
+        if hmac.compare_digest(doc.hmac_token, expected):
             return True, "HMAC valid"
         return False, "HMAC mismatch"
 

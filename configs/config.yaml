@@ -30,6 +30,7 @@ layer1:
     secret_key: "shieldrag_prod_key_2026"
   sag:
     algorithm: "AES-256-GCM"
+    secret_key: "sag_prod_key_2026"
 
 layer2:
   retrievers:

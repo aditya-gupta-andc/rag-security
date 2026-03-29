@@ -1,5 +1,6 @@
 """ShieldRAG Pipeline — 4-layer composition with proper train/test split."""
 import time, logging
+from collections import deque
 from typing import List, Dict
 import torch
 from shieldrag.data.dataset_loader import Document, Query, DatasetLoader
@@ -22,7 +23,9 @@ class ShieldRAGPipeline:
         self.layer3=GenSafe(config, self.device)
         self.layer4=AccessForge(config)
         self.all_docs=[]; self.safe_docs=[]; self.blocked_docs=[]
-        self.is_ready=False; self.query_log=[]
+        self.is_ready=False
+        max_log=config.get("max_query_log_size", 10_000)
+        self.query_log=deque(maxlen=max_log)
 
     def load_and_prepare(self, documents=None, train_queries=None):
         loader=DatasetLoader(self.config)
@@ -59,7 +62,7 @@ class ShieldRAGPipeline:
             r["blocked"]=True; r["blocked_by"]="Layer 3 (GenSafe)"
             r["response"]="Blocked: injection detected."
             r["latency_ms"]=round((time.time()-t0)*1000,1)
-            self.query_log.append(r); return r
+            self._append_log(r); return r
         # L2: retrieve
         t1=time.time()
         candidates=self.layer2.retrieve_with_consensus(query.text, top_k=5)
@@ -73,7 +76,7 @@ class ShieldRAGPipeline:
             r["blocked"]=True; r["blocked_by"]="Layer 4 (AccessForge)"
             r["response"]="Blocked: extraction/access violation."
             r["latency_ms"]=round((time.time()-t0)*1000,1)
-            self.query_log.append(r); return r
+            self._append_log(r); return r
         # L2: isolation
         iso_results=self.layer2.apply_isolation(adocs)
         contexts=[c for c,_,_ in iso_results if c]
@@ -92,7 +95,10 @@ class ShieldRAGPipeline:
         else:
             r["response"]=response
         r["latency_ms"]=round((time.time()-t0)*1000,1)
-        self.query_log.append(r); return r
+        self._append_log(r); return r
+
+    def _append_log(self, r):
+        self.query_log.append(r)
 
     def get_stats(self):
         total=len(self.query_log); blocked=sum(1 for r in self.query_log if r["blocked"])
