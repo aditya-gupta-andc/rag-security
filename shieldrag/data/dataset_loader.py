@@ -284,38 +284,90 @@ class DatasetLoader:
     def __init__(self, config: dict):
         self.cfg = config.get("datasets", {})
         self.qa_max = self.cfg.get("qa_max_samples", 300)
+        self.injection_max = self.cfg.get("injection_samples", 150)
         self.test_split = self.cfg.get("test_split", 0.2)
         self.val_split = self.cfg.get("val_split", 0.1)
 
-    def _load_hf_nq(self) -> Tuple[List[Document], List[Query]]:
-        """Try loading NQ from HuggingFace."""
+    def _load_squad(self) -> Tuple[List[Document], List[Query]]:
+        """Load SQuAD passages and questions from HuggingFace."""
         try:
             from datasets import load_dataset
-            logger.info("Loading Natural Questions from HuggingFace...")
-            ds = load_dataset("google-research-datasets/natural_questions",
-                              "default", split="validation",
-                              streaming=True, trust_remote_code=True)
-            docs, queries = [], []
-            for i, item in enumerate(ds):
-                if i >= self.qa_max:
+            logger.info("Loading SQuAD from HuggingFace (real dataset)...")
+            ds = load_dataset("rajpurkar/squad", split="train", streaming=True)
+            docs, queries, seen_contexts = [], [], set()
+            for item in ds:
+                if len(docs) >= self.qa_max:
                     break
-                q_text = item.get("question", {})
-                if isinstance(q_text, dict):
-                    q_text = q_text.get("text", "")
-                doc_text = item.get("document", {}).get("text", "")
-                if not q_text or not doc_text or len(doc_text) < 50:
+                ctx = item.get("context", "")
+                qtext = item.get("question", "")
+                answers = item.get("answers", {}).get("text", [])
+                if not ctx or not qtext or ctx in seen_contexts or len(ctx) < 50:
                     continue
-                passage = doc_text[:500].strip()
+                seen_contexts.add(ctx)
+                answer = answers[0] if answers else ""
                 tid = random.choice(["tenant_A", "tenant_B", "tenant_C"])
-                docs.append(Document(doc_id=f"NQ-{i:04d}", content=passage,
-                                     tenant_id=tid, metadata={"source": "nq"}))
-                queries.append(Query(query_id=f"Q-NQ-{i:04d}", text=str(q_text),
-                                     tenant_id=tid, gold_doc_ids=[f"NQ-{i:04d}"]))
-            logger.info(f"Loaded {len(docs)} NQ documents")
+                doc_id = f"SQ-{len(docs):04d}"
+                docs.append(Document(doc_id=doc_id, content=ctx[:600].strip(),
+                                     tenant_id=tid, metadata={"source": "squad"}))
+                queries.append(Query(query_id=f"Q-SQ-{len(queries):04d}", text=qtext,
+                                     expected_answer=answer, tenant_id=tid,
+                                     gold_doc_ids=[doc_id]))
+            logger.info(f"Loaded {len(docs)} SQuAD passages and {len(queries)} questions")
             return docs, queries
         except Exception as e:
-            logger.warning(f"NQ load failed: {e}")
+            logger.warning(f"SQuAD load failed: {e}")
             return [], []
+
+    def load_injection_dataset(self) -> Tuple[List[str], List[int]]:
+        """Load deepset/prompt-injections from HuggingFace for classifier training.
+
+        Returns (texts, labels) where label=1 means injection, 0 means benign.
+        Falls back to synthetic data if the dataset is unavailable.
+        """
+        texts: List[str] = []
+        labels: List[int] = []
+        try:
+            from datasets import load_dataset
+            logger.info("Loading deepset/prompt-injections from HuggingFace...")
+            ds = load_dataset("deepset/prompt-injections", split="train")
+            for item in ds:
+                t = item.get("text", "")
+                raw_label = item.get("label", 0)
+                try:
+                    l = int(raw_label)
+                except (TypeError, ValueError):
+                    continue  # skip malformed labels
+                if t:
+                    texts.append(t)
+                    labels.append(l)
+            logger.info(f"Loaded {len(texts)} real injection examples "
+                        f"({sum(labels)} injections, {len(labels)-sum(labels)} benign)")
+        except Exception as e:
+            logger.warning(f"prompt-injections dataset load failed: {e}")
+
+        # Always augment with our curated synthetic attacks to ensure coverage of
+        # all four difficulty levels and domain-specific injection patterns.
+        for q in (EASY_INJECTION_QUERIES + MEDIUM_INJECTION_QUERIES +
+                  HARD_INJECTION_QUERIES + EVASIVE_INJECTION_QUERIES):
+            texts.append(q)
+            labels.append(1)
+        # Add synthetic indirect injection doc content
+        for content in INDIRECT_INJECTION_DOCS:
+            texts.append(content)
+            labels.append(1)
+        # Benign queries / passages
+        for q, _ in BENIGN_QA:
+            texts.append(q)
+            labels.append(0)
+        for p in BENIGN_PASSAGES:
+            texts.append(p)
+            labels.append(0)
+        for q, _ in BORDERLINE_QUERIES:
+            texts.append(q)
+            labels.append(0)
+        logger.info(f"Injection training set total: {len(texts)} samples "
+                    f"({sum(labels)} positive, {len(labels)-sum(labels)} negative)")
+        return texts, labels
 
     def _fallback_qa(self) -> Tuple[List[Document], List[Query]]:
         """Built-in QA fallback."""
@@ -438,8 +490,8 @@ class DatasetLoader:
         Load everything and split into train/val/test.
         Returns: (all_documents, train_queries, val_queries, test_queries)
         """
-        # Benign data
-        hf_docs, hf_queries = self._load_hf_nq()
+        # Benign data — prefer SQuAD (real, large), fall back to built-in passages
+        hf_docs, hf_queries = self._load_squad()
         fb_docs, fb_queries = self._fallback_qa()
         benign_docs = hf_docs + fb_docs if hf_docs else fb_docs
         benign_queries = hf_queries + fb_queries if hf_queries else fb_queries

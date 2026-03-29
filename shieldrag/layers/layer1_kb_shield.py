@@ -84,6 +84,22 @@ class GMTPScanner:
         yp = self.classifier.predict(X)
         logger.info("GMTP train report:\n" + classification_report(y, yp, target_names=["benign","poisoned"], zero_division=0))
 
+    def save(self, path: str):
+        """Persist trained GMTP classifier to *path* (joblib format)."""
+        import joblib
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        joblib.dump({"classifier": self.classifier, "feature_dim": self.feature_dim}, path)
+        logger.info(f"GMTP: Saved classifier to {path}")
+
+    def load(self, path: str):
+        """Restore previously saved GMTP classifier from *path*."""
+        import joblib
+        data = joblib.load(path)
+        self.classifier = data["classifier"]
+        self.feature_dim = data["feature_dim"]
+        self.is_trained = True
+        logger.info(f"GMTP: Loaded classifier from {path}")
+
     def scan(self, doc):
         if not self.is_trained: return True, 0.5, "Not trained"
         X = self._extract_features(doc.content).reshape(1,-1)
