@@ -1,0 +1,86 @@
+# ShieldRAG v2 — Configuration (RTX Pro 6000 / 48GB VRAM / 70GB RAM)
+
+device: "auto"
+seed: 42
+
+models:
+  embedding_model: "sentence-transformers/all-mpnet-base-v2"
+  reranker_model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  classifier_model: "microsoft/deberta-v3-base"
+  generator_model: "google/flan-t5-large"
+  use_hf_token: false
+
+datasets:
+  qa_max_samples: 300
+  passage_max_samples: 2000
+  injection_samples: 150
+  poisoning_samples: 80
+  evasive_attack_samples: 100
+  borderline_samples: 50
+  test_split: 0.2
+  val_split: 0.1
+
+layer1:
+  gmtp:
+    anomaly_threshold: 0.55
+    n_estimators: 300
+    max_depth: 7
+  fath:
+    hmac_algorithm: "sha256"
+    secret_key: "shieldrag_prod_key_2026"
+  sag:
+    algorithm: "AES-256-GCM"
+
+layer2:
+  retrievers:
+    - name: "dense_mpnet"
+      type: "dense"
+      model: "sentence-transformers/all-mpnet-base-v2"
+      top_k: 10
+    - name: "sparse_bm25"
+      type: "bm25"
+      top_k: 10
+    - name: "dense_minilm"
+      type: "dense"
+      model: "sentence-transformers/all-MiniLM-L6-v2"
+      top_k: 10
+  consensus:
+    min_votes: 2
+    final_top_k: 5
+  reranker:
+    enabled: true
+    top_k: 5
+  isolation:
+    enabled: true
+    strip_mode: "sanitise"
+
+layer3:
+  struq:
+    context_delimiter: "<<<CONTEXT>>>"
+    query_delimiter: "<<<QUERY>>>"
+  injecguard:
+    rule_threshold: 0.35
+    classifier_threshold: 0.45
+    train_epochs: 3
+    learning_rate: 2.0e-5
+    batch_size: 16
+  verifier:
+    model_type: "gradient_boosting"
+    n_estimators: 200
+    threshold: 0.45
+
+layer4:
+  ragfort:
+    extraction_threshold: 4
+    decoy_count: 15
+  audit:
+    enabled: true
+    log_file: "results/audit.log"
+
+evaluation:
+  output_dir: "results"
+
+web:
+  host: "0.0.0.0"
+  port: 5000
+  debug: false

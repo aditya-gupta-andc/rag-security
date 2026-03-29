@@ -1,0 +1,44 @@
+# ShieldRAG v2 — Requirements (RTX Pro 6000 / High-End GPU)
+# Install: pip install -r requirements.txt
+
+# Core ML
+torch>=2.1.0
+transformers>=4.38.0
+sentence-transformers>=2.5.0
+accelerate>=0.27.0
+
+# Vector search
+faiss-cpu>=1.7.4
+
+# Datasets
+datasets>=2.18.0
+
+# ML utilities
+scikit-learn>=1.4.0
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.12.0
+
+# Visualization
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# Web UI
+flask>=3.0.0
+
+# Cryptography
+cryptography>=42.0.0
+
+# Config
+pyyaml>=6.0.1
+
+# CLI + logging
+rich>=13.7.0
+click>=8.1.0
+loguru>=0.7.0
+
+# Testing
+pytest>=8.0.0
+
+# Progress
+tqdm>=4.66.0
